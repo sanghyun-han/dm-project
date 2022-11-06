@@ -36,13 +36,18 @@ def main():
     als = ALS_MODEL()
     als.train(movielens.train)
     top_all, top_k_reco = als.get_output(movielens.train, movielens.user_item, TOP_K)
-    als_eval = Evaluation(movielens.train, movielens.test, top_k_reco, top_all, TOP_K, "prediction")
     
     # random model
     rnd = RANDOM_MODEL()
     pred = rnd.get_output(movielens.train, movielens.user_item, TOP_K)
-    print("prediction: ", pred)
-    print(pred.columns)
+    
+    # save the output
+    top_all.coalesce(1).write.format("csv").option("header", "true").mode("overwrite").save("../data/top_all")
+    top_k_reco.coalesce(1).write.format("csv").option("header", "true").mode("overwrite").save("../data/top_k")
+    pred.coalesce(1).write.format("csv").option("header", "true").mode("overwrite").save("../data/pred")
+    
+    # evaluation 
+    als_eval = Evaluation(movielens.train, movielens.test, top_k_reco, top_all, TOP_K, "prediction")
     rnd_eval = Evaluation(movielens.train, movielens.test, pred, pred, TOP_K, "score")
     
     als_results = als_eval.get_results(args.data_size, TOP_K, "als")

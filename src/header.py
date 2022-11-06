@@ -38,6 +38,9 @@ from utils.spark_utils import start_or_get_spark
 from pyspark.sql.window import Window
 import pyspark.sql.functions as F
 
+# for combination
+import itertools
+
 print("System version: {}".format(sys.version))
 print("Spark version: {}".format(pyspark.__version__))
 
@@ -175,8 +178,8 @@ class ALS_MODEL():
         return self.model
     def get_output(self, train, user_item, TOP_K):
         dfs_pred = self.model.transform(user_item)
-        print("# pred: ", dfs_pred.count())
-        print("# train: ", train.count())
+        # print("# pred: ", dfs_pred.count())
+        # print("# train: ", train.count())
         # Remove seen items.
         # cond = [
         #     # ((right_side.lower_street_number.isNotNull())
@@ -191,26 +194,25 @@ class ALS_MODEL():
             [COL_USER, COL_ITEM],
             how='outer'
         )
-        print(dfs_pred_exclude_train)
-        # print(dfs_pred_exclude_train["train.Rating"])
-        # print(dfs_pred_exclude_train["pred."+ COL_ITEM])
-        # print(dfs_pred_exclude_train["pred." + COL_USER])
-        # print(dfs_pred_exclude_train["pred." + "prediction"])
-        # print(dfs_pred_exclude_train["train.Rating"])
-        print("# exclude: ", dfs_pred_exclude_train.count())
+        # print(dfs_pred_exclude_train)
+        # print("# exclude: ", dfs_pred_exclude_train.count())
         top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
         top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_RATING)
-        print(top_all)
-        print("top all: ", top_all.count())
+        # print(top_all)
+        # print("top all: ", top_all.count())
             
-        window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())    
+        window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+        
         top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
         
-        print(top_k_reco)
-        print("top_k_reco: ", top_k_reco.count())
+        # print(top_k_reco)
+        # print("top_k_reco: ", top_k_reco.count())
         
         return top_all, top_k_reco
-        # als_eval = Evaluation(movielens.train, movielens.test, top_k_reco, top_all, TOP_K)
+    
+    def get_comb_output(self, train, user_item, TOP_K, COMB_LEFT, COMB_RIGHT):
+        comb =     
+        
 class RANDOM_MODEL():
     def __init__(self):
         self.model = Window.partitionBy(COL_USER).orderBy(F.rand())
@@ -241,10 +243,7 @@ class Evaluation():
             col_user = COL_USER, 
             col_item = COL_ITEM
         )
-        print(test)
-        print(test.columns)
-        if COL_RATING not in test.columns:
-            raise ValueError("Schema of rating_true not valid. Missing Rating Col")
+        
         ranking_eval = SparkRankingEvaluation(
             rating_true=test,
             rating_pred=top_all, 
@@ -255,6 +254,7 @@ class Evaluation():
             col_prediction=pred_columns,
             relevancy_method="top_k"
         )
+        
         self.ranking_metrics = get_ranking_results(ranking_eval)
         self.diversity_metrics = get_diversity_results(diversity_eval)
     
