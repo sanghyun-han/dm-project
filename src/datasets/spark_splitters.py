@@ -8,13 +8,13 @@ try:
 except ImportError:
     pass  # skip this import if we are in pure python environment
 
-from recommenders.utils.constants import (
+from utils.constants import (
     DEFAULT_ITEM_COL,
     DEFAULT_USER_COL,
     DEFAULT_TIMESTAMP_COL,
     DEFAULT_RATING_COL,
 )
-from recommenders.datasets.split_utils import (
+from datasets.split_utils import (
     process_split_ratio,
     min_rating_filter_spark,
 )

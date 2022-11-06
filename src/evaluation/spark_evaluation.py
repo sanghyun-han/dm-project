@@ -12,7 +12,7 @@ try:
 except ImportError:
     pass  # skip this import if we are in pure python environment
 
-from recommenders.utils.constants import (
+from utils.constants import (
     DEFAULT_PREDICTION_COL,
     DEFAULT_USER_COL,
     DEFAULT_ITEM_COL,
