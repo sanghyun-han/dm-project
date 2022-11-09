@@ -203,6 +203,10 @@ class ALS_MODEL():
             
         window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
         
+        # inter = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K)
+        # print("inter: ", inter)
+        # inter.show(30, False)
+        
         top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
         
         # print(top_k_reco)
@@ -210,8 +214,26 @@ class ALS_MODEL():
         
         return top_all, top_k_reco
     
-    def get_comb_output(self, train, user_item, TOP_K, COMB_LEFT, COMB_RIGHT):
-        comb =     
+    def get_comb_output(self, top_all, top_k_reco, TOP_K, COMB_LEFT, COMB_RIGHT):
+        window = Window.partitionBy(COL_USER).orderBy(F.rand())
+        # window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+        # window_1 = Window.partitionBy(COL_USER).orderBy(F.col("group_index").desc())
+        avg_col = top_all.select(F.avg(F.col("prediction"))).first()[0]
+
+        new_top_all = top_all.withColumn("prediction", F.col("prediction") + avg_col)
+        # new_age_df.limit(5).show()
+        
+        # top_all = top_all.withColumn("prediction", F.col("prediction") - F.rand()/F.avg("prediction"))
+        top_k_reco = top_k_reco.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+        
+        # tmp_0 = top_all.withColumn("group_index", F.row_number().over(window) / int(F.max(F.row_number().over(window)) / 3))
+        # tmp_1 = tmp_0.withColumn("group", F.row_number().over(window_1))
+        # print("tmp 0: ", tmp_0)
+        # tmp_0.show(30,False)
+        # print("tmp 1: ", tmp_1)
+        # tmp_1.show(30,False)
+        # comb = asdf
+        return new_top_all, top_k_reco
         
 class RANDOM_MODEL():
     def __init__(self):
@@ -234,6 +256,9 @@ class RANDOM_MODEL():
             .drop(COL_RATING)
         )
         return pred_df
+    
+    # def get_comb_output(self, train, user_item, TOP_K, COMB_LEFT, COMB_RIGHT):
+        
     
 class Evaluation():
     def __init__(self, train, test, top_k_reco, top_all, TOP_K, pred_columns):
