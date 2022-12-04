@@ -1,6 +1,7 @@
 import logging
 import numpy as np
 import pandas as pd
+import itertools
 
 from datasets import movielens
 from datasets.python_splitters import python_stratified_split
@@ -137,9 +138,24 @@ class DataLoader():
             items = self.train.select(COL_ITEM).distinct()
             self.user_item = users.crossJoin(items)
             print("user item: ", self.user_item)
+            
             # comb
             avg = self.train.select(F.avg((F.col(COL_RATING)))).first()[0]
-            self.train = self.train.withColumn(COL_COMB_RATING, alpha*F.col(COL_RATING) + (1-alpha)*avg)
+            self.train = self.train.withColumn(COL_COMB_RATING, (alpha*F.col(COL_RATING) + (1-alpha)*avg))
+            
+            print("train count", self.train.select(COL_RATING).count())
+            print("comb count", self.train.select(COL_COMB_RATING).count())
+            # get max value
+            train_max = self.train.select(F.max((F.col(COL_RATING)))).first()[0]
+            test_max = self.test.select(F.max((F.col(COL_RATING)))).first()[0]
+            comb_max = self.train.select(F.max((F.col(COL_COMB_RATING)))).first()[0]
+            
+            # normalize 0~1
+            # self.train = self.train.withColumn(COL_RATING, (F.col(COL_RATING) / train_max))
+            # self.train = self.train.withColumn(COL_COMB_RATING, (F.col(COL_COMB_RATING) / comb_max))
+            # self.test = self.test.withColumn(COL_RATING, (F.col(COL_RATING) / test_max))
+            
+            print("avg, test_max, train_max, comb_max", avg, test_max, train_max, comb_max)
         else:
             print ("Type error\n")
 class SAR_MODEL():
@@ -250,7 +266,7 @@ class COMB_MODEL():
         "ratingCol": COL_COMB_RATING,
         }
         self.als = ALS(
-            rank=rank,
+            rank=10,
             maxIter=15,
             implicitPrefs=False,
             regParam=0.05,
@@ -278,21 +294,90 @@ class COMB_MODEL():
                 how='outer'
             )
             
-            top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
+            top_all = dfs_pred_exclude_train.filter(F.col("train.weighted").isNull())
             top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_COMB_RATING)
+            # top_comb = top_all.withColumn("COMB", F.col)
+            # F.locate
+            # F.
             
-            window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+            # self.train = self.train.withColumn(COL_RATING, (F.col(COL_RATING) / train_max))
             
-            top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
-            print("COMBCOUNT", top_k_reco.count())
-            print(top_k_reco)
-            # comb_window = Window.partitionBy(COL_USER).orderBy(F.rand())
+            window_asc = Window.partitionBy(COL_USER).orderBy(F.col("prediction").asc())
+            window_desc = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+            window = Window.partitionBy("asc_user").orderBy(F.rand())
             
+            top_k_desc = top_all.select("*", F.row_number().over(window_desc).alias("rank")).filter(F.col("rank") <= 20).drop("rank").drop("weighted")
+            top_k_asc = top_k_desc.select("*", F.row_number().over(window_asc).alias("rank")).drop("rank").drop("weighted")
+            
+            # join with combination
+            top_k_asc = top_k_asc.selectExpr("UserId as asc_user", "MovieId as asc_item", "prediction as asc_pred")
+            top_k_desc = top_k_desc.selectExpr("UserId as desc_user", "MovieId as desc_item", "prediction as desc_pred")
+            
+            cond = [top_k_asc["asc_user"] == top_k_desc["desc_user"], top_k_asc["asc_item"] != top_k_desc["desc_item"]]
+            joined = top_k_asc.join(
+                top_k_desc,
+                cond,
+                how='outer'
+            )
+            
+            # print(joined.show(60))
+            
+            joined = joined.withColumn("COMB", ((F.col("asc_pred") + F.col("desc_pred"))/2 ))
+            # print(joined.show(60))
+            joined = joined.dropDuplicates(["COMB"])
+            # print(joined.show(60))
+            
+            # joined_k = joined.withColumn("asc_user", F.col("asc.userId")).withColumn("desc_user", F.col("desc.userId")).drop("asc.userId").drop("desc.userId")
+            # joined_k = joined.withColumn("asc_movieId", F.col("asc.movieId")).withColumn("desc_movieId", F.col("desc.movieId")).drop("asc.movieId").drop("desc.movieId")
+            # joined_k = joined.withColumn("asc_pred", F.col("asc.prediction")).withColumn("desc_pred", F.col("desc.prediction")).drop("asc.prediction").drop("desc.prediction")
+            
+            # asc = top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_RATING)
+            col_names = ['desc_user', 'desc_item', 'desc_pred']
+            joined_k = joined.select(*col_names, F.row_number().over(window).alias("rank")).filter(F.col("rank") <= 10).drop("rank")
+            joined_k = joined_k.selectExpr("desc_user as UserId", "desc_item as MovieId", "desc_pred as prediction")
+            # joined_k = joined_k.dropDuplicates([])
+            # print(joined_k.show(60))
+            
+            # # regenerate recommendations
+            # cols = [COL_USER, COL_ITEM, "prediction"]
+            # data = []
+            
+            # # set_item = set()
+            # # set_mv = joined_k.select("asc.userId")
+            # iter = joined_k.collect()
+            # print(iter[0])
+            # print(len(iter))
+            # print(joined_k.count())
+            # idx = 0
+            # name = ""
+            # while(idx < joined_k.count()):
+            #     if idx % 10 == 0 : print("iter: ", idx, len(data), name)
+            #     if (len(data) % TOP_K == 0) and name == iter[idx]["asc_user"]:
+            #         idx += 1
+            #         continue
+                
+            #     name = iter[idx]["asc_user"]
+                
+            #     if not [iter[idx]["asc_user"], iter[idx]["asc_item"], iter[idx]["asc_pred"]] in data:
+            #         data.append([iter[idx]["asc_user"], iter[idx]["asc_item"], iter[idx]["asc_pred"]])
+            #     if not [iter[idx]["desc_user"], iter[idx]["desc_item"], iter[idx]["desc_pred"]] in data:
+            #         data.append([iter[idx]["desc_user"], iter[idx]["desc_item"], iter[idx]["desc_pred"]])
+                
+            #     idx += 1
+                
+            # top_k_reco = spark.createDataFrame(data, cols)
+            # print(top_k_reco.show(60))
+            # # print(joined_k["asc.userId"])
+            # top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+            # print("COMBCOUNT", top_k_reco.count())
             # print(top_k_reco)
-            # print("top_k_reco: ", top_k_reco.count())
+            # # comb_window = Window.partitionBy(COL_USER).orderBy(F.rand())
+            
+            # # print(top_k_reco)
+            # # print("top_k_reco: ", top_k_reco.count())
         print("COMB Took {} seconds for inference.".format(infer_time.interval))
         
-        return top_all, top_k_reco
+        return top_all, joined_k
     
     def get_comb_output(self, top_all, top_k_reco, TOP_K, user_item, COMB_LEFT, COMB_RIGHT):
         window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
