@@ -54,6 +54,7 @@ COL_ITEM="MovieId"
 COL_RATING="Rating"
 COL_TITLE="Title"
 COL_GENRE="Genre"
+COL_COMB_RATING="weighted"
 
 def get_ranking_results(ranking_eval):
     metrics = {
@@ -90,7 +91,7 @@ def generate_summary(data, algo, k, ranking_metrics, diversity_metrics):
     return summary
 
 class DataLoader():
-    def __init__(self, data_size, types):
+    def __init__(self, data_size, types, alpha):
         if types == "movielens":
             data = movielens.load_pandas_df(size=data_size)
             # Convert the float precision to 32-bit in order to reduce memory consumption
@@ -136,6 +137,9 @@ class DataLoader():
             items = self.train.select(COL_ITEM).distinct()
             self.user_item = users.crossJoin(items)
             print("user item: ", self.user_item)
+            # comb
+            avg = self.train.select(F.avg((F.col(COL_RATING)))).first()[0]
+            self.train = self.train.withColumn(COL_COMB_RATING, alpha*F.col(COL_RATING) + (1-alpha)*avg)
         else:
             print ("Type error\n")
 class SAR_MODEL():
@@ -173,44 +177,48 @@ class ALS_MODEL():
         with Timer() as train_time:
             self.model = self.als.fit(train)
             
-        print("Took {} seconds for training.".format(train_time.interval))
+        print("ALS Took {} seconds for training.".format(train_time.interval))
         
         return self.model
     def get_output(self, train, user_item, TOP_K):
-        dfs_pred = self.model.transform(user_item)
-        # print("# pred: ", dfs_pred.count())
-        # print("# train: ", train.count())
-        # Remove seen items.
-        # cond = [
-        #     # ((right_side.lower_street_number.isNotNull())
-        # ]
-        # dfs_pred_exclude_train = dfs_pred.alias("pred").join(
-        #     train.alias("train"),
-        #     [COL_USER, COL_ITEM],
-        #     how='outer'
-        # )
-        dfs_pred_exclude_train = train.alias("train").join(
-            dfs_pred.alias("pred"),
-            [COL_USER, COL_ITEM],
-            how='outer'
-        )
-        # print(dfs_pred_exclude_train)
-        # print("# exclude: ", dfs_pred_exclude_train.count())
-        top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
-        top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_RATING)
-        # print(top_all)
-        # print("top all: ", top_all.count())
+        with Timer() as infer_time:
+            dfs_pred = self.model.transform(user_item)
+            # print("# pred: ", dfs_pred.count())
+            # print("# train: ", train.count())
+            # Remove seen items.
+            # cond = [
+            #     # ((right_side.lower_street_number.isNotNull())
+            # ]
+            # dfs_pred_exclude_train = dfs_pred.alias("pred").join(
+            #     train.alias("train"),
+            #     [COL_USER, COL_ITEM],
+            #     how='outer'
+            # )
+            dfs_pred_exclude_train = train.alias("train").join(
+                dfs_pred.alias("pred"),
+                [COL_USER, COL_ITEM],
+                how='outer'
+            )
+            # print(dfs_pred_exclude_train)
+            # print("# exclude: ", dfs_pred_exclude_train.count())
+            top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
+            top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_RATING)
+            # print(top_all)
+            # print("top all: ", top_all.count())
+                
+            window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
             
-        window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
-        
-        # inter = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K)
-        # print("inter: ", inter)
-        # inter.show(30, False)
-        
-        top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
-        
-        # print(top_k_reco)
-        # print("top_k_reco: ", top_k_reco.count())
+            # inter = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K)
+            # print("inter: ", inter)
+            # inter.show(30, False)
+            
+            top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+            
+            
+            print("ALSCOUNT", top_k_reco.count())
+            print(top_k_reco)
+            # print("top_k_reco: ", top_k_reco.count())
+        print("ALS Took {} seconds for inference.".format(infer_time.interval))
         
         return top_all, top_k_reco
     
@@ -225,6 +233,90 @@ class ALS_MODEL():
         
         # top_all = top_all.withColumn("prediction", F.col("prediction") - F.rand()/F.avg("prediction"))
         top_k_reco = top_k_reco.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+        print(top_k_reco.count())
+        # tmp_0 = top_all.withColumn("group_index", F.row_number().over(window) / int(F.max(F.row_number().over(window)) / 3))
+        # tmp_1 = tmp_0.withColumn("group", F.row_number().over(window_1))
+        # print("tmp 0: ", tmp_0)
+        # tmp_0.show(30,False)
+        # print("tmp 1: ", tmp_1)
+        # tmp_1.show(30,False)
+        # comb = asdf
+        return new_top_all, top_k_reco
+class COMB_MODEL():
+    def __init__(self, rank):
+        header = {
+        "userCol": COL_USER,
+        "itemCol": COL_ITEM,
+        "ratingCol": COL_COMB_RATING,
+        }
+        self.als = ALS(
+            rank=rank,
+            maxIter=15,
+            implicitPrefs=False,
+            regParam=0.05,
+            coldStartStrategy='drop',
+            nonnegative=False,
+            seed=42,
+            **header
+        )
+        self.model = None
+    
+    def train(self, train):
+        with Timer() as train_time:
+            self.model = self.als.fit(train)
+            
+        print("COMB Took {} seconds for training.".format(train_time.interval))
+        
+        return self.model
+    def get_output(self, train, user_item, TOP_K, comb_r):
+        with Timer() as infer_time:
+            dfs_pred = self.model.transform(user_item)
+            
+            dfs_pred_exclude_train = train.alias("train").join(
+                dfs_pred.alias("pred"),
+                [COL_USER, COL_ITEM],
+                how='outer'
+            )
+            
+            top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
+            top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_COMB_RATING)
+            
+            window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+            
+            top_k_reco = top_all.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+            print("COMBCOUNT", top_k_reco.count())
+            print(top_k_reco)
+            # comb_window = Window.partitionBy(COL_USER).orderBy(F.rand())
+            
+            # print(top_k_reco)
+            # print("top_k_reco: ", top_k_reco.count())
+        print("COMB Took {} seconds for inference.".format(infer_time.interval))
+        
+        return top_all, top_k_reco
+    
+    def get_comb_output(self, top_all, top_k_reco, TOP_K, user_item, COMB_LEFT, COMB_RIGHT):
+        window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+        # window = Window.partitionBy(COL_USER).orderBy(F.col("prediction").desc())
+        # window_1 = Window.partitionBy(COL_USER).orderBy(F.col("group_index").desc())
+        avg_col = top_all.select(F.avg(F.col("prediction"))).first()[0]
+        dfs_pred = self.model.transform(user_item)
+        
+        # dfs_pred_exclude_train = train.alias("train").join(
+        #     dfs_pred.alias("pred"),
+        #     [COL_USER, COL_ITEM],
+        #     how='outer'
+        # )
+        
+        # top_all = dfs_pred_exclude_train.filter(F.col("train.Rating").isNull())
+        top_all = top_all.select(COL_USER, COL_ITEM, "prediction", COL_RATING)
+        
+        
+        new_top_all = top_all.withColumn("prediction", F.col("prediction") + avg_col)
+        # new_age_df.limit(5).show()
+        
+        # top_all = top_all.withColumn("prediction", F.col("prediction") - F.rand()/F.avg("prediction"))
+        top_k_reco = top_k_reco.select("*", F.row_number().over(window).alias("rank")).filter(F.col("rank") <= TOP_K).drop("rank")
+        print(top_k_reco)
         
         # tmp_0 = top_all.withColumn("group_index", F.row_number().over(window) / int(F.max(F.row_number().over(window)) / 3))
         # tmp_1 = tmp_0.withColumn("group", F.row_number().over(window_1))
