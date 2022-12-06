@@ -10,8 +10,8 @@
 - COMB_R: right combiation parameter
 - W: alpha of weighted sum in pre-processing
 - DATASIZE: data size (currently we use 100k data)  
-
-
+```
+    #!/bin/bash
     # arguments
     DATA="../data/ml-25m"
     TOP_K="10"
@@ -30,3 +30,4 @@
         ARGS="--data-path $DATA --top-k $TOP_K --comb $COMB --data-size $i --comb-l $COMB_L --comb-r $COMB_R --weight $W"
         python3 main.py $ARGS
     done
+```
