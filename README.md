@@ -4,13 +4,13 @@
 `./src/exe.sh`
 
 ## evaluation with parameter setting
-DATA: data location (deprecated)
-TOP_K: recommendation items 
-COMB_L: left combination parameter
-COMB_R: right combiation parameter
-W: alpha of weighted sum in pre-processing
-DATASIZE: data size (currently we use 100k data)  
-    #!/bin/bash
+- DATA: data location (deprecated)
+- TOP_K: recommendation items 
+- COMB_L: left combination parameter
+- COMB_R: right combiation parameter
+- W: alpha of weighted sum in pre-processing
+- DATASIZE: data size (currently we use 100k data)  
+
 
     # arguments
     DATA="../data/ml-25m"
